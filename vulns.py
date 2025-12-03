@@ -1,187 +1,161 @@
 # vulnerable_app.py
-# Purpose: Demonstration of GitHub CodeQL's scanning capabilities.
 #
-# WARNING: This script is INTENTIONALLY vulnerable and contains numerous security flaws.
-# DO NOT RUN, DEPLOY, OR USE THIS CODE IN ANY PRODUCTION OR DEVELOPMENT ENVIRONMENT.
-# It is designed solely to trigger alerts from a SAST scanner like CodeQL.
+#
+# A demonstration Python application containing a wide variety of vulnerabilities
+# for the purpose of testing static analysis security tools (SAST) like CodeQL.
+#
+# --- INTENTIONALLY INSECURE & SYNTACTICALLY CORRECT ---
 
 import os
 import subprocess
 import sqlite3
-import pickle
-import hashlib
-import tempfile
-import logging
-import requests
-from flask import Flask, request, Markup, make_response
-from xml.etree import ElementTree
+import yaml
+from lxml import etree
+from flask import Flask, request
 
-# --- App Setup ---
+# --- Vulnerable Application Setup ---
+
 app = Flask(__name__)
 
-# --- Vulnerability Configuration ---
-
 # CWE-798: Use of Hard-coded Credentials
-# CodeQL Alert: Hard-coded credentials
-API_KEY = "sk-live-2zscaler_fake_key_for_roop_singh_demo" 
-DB_PASSWORD = "password123"
+# CodeQL ID: python/hardcoded-credentials
+# This is a simple, high-confidence finding for SAST tools.
+API_KEY = "sk_live_12345abcdeFGHIjklmnoPQRSTuvwXYz12345"
+DATABASE_PASSWORD = "password123!"
 
-# --- Vulnerabilities ---
 
-@app.route('/command')
-def command_injection():
+# --- Vulnerable Function Definitions ---
+
+def command_injection(user_input):
     """
     CWE-78: Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')
-    CodeQL Alert: OS command injection
+    CodeQL ID: python/command-line-injection
     """
-    domain = request.args.get('domain')
-    # Unsanitized user input is passed directly to a shell command.
-    os.system(f"nslookup {domain}") 
-    return "Command executed."
+    print(f"\n[!] Triggering OS Command Injection (CWE-78) with input: {user_input}")
+    # BAD: Using shell=True with user-controllable input allows command injection.
+    # An input like "test.txt; ls -la" would execute the 'ls' command.
+    subprocess.call(f"ls {user_input}", shell=True)
 
-@app.route('/user_data')
-def sql_injection():
+
+def sql_injection(user_id):
     """
     CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')
-    CodeQL Alert: SQL injection
+    CodeQL ID: python/sql-injection
     """
-    user_id = request.args.get('id')
-    conn = sqlite3.connect('database.db')
-    cursor = conn.cursor()
-    # User input is concatenated directly into a SQL query.
+    print(f"\n[!] Triggering SQL Injection (CWE-89) with input: '{user_id}'")
+    db = sqlite3.connect(":memory:")
+    cursor = db.cursor()
+    # BAD: Constructing a query with an f-string using raw user input.
+    # An input like "' OR '1'='1" would return all users.
     query = f"SELECT * FROM users WHERE id = '{user_id}'"
-    cursor.execute(query)
-    return str(cursor.fetchall())
+    print(f"    Executing query: {query}")
+    try:
+        cursor.execute(query)
+    except sqlite3.OperationalError as e:
+        print(f"    (Query failed as expected, table 'users' does not exist: {e})")
+    db.close()
 
-@app a.route('/hello')
-def cross_site_scripting():
-    """
-    CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')
-    CodeQL Alert: Reflected cross-site scripting
-    """
-    name = request.args.get('name')
-    # User input is directly rendered in the HTML response without sanitization.
-    return Markup(f"<h1>Hello, {name}!</h1>") 
 
-@app.route('/file')
-def path_traversal():
-    """
-    CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')
-    CodeQL Alert: Path injection
-    """
-    filename = request.args.get('filename')
-    # User can provide '..' to navigate the file system.
-    with open(f'/var/www/data/{filename}', 'r') as f:
-        return f.read()
-
-@app.route('/deserialize')
-def insecure_deserialization():
+def unsafe_deserialization(yaml_string):
     """
     CWE-502: Deserialization of Untrusted Data
-    CodeQL Alert: Deserialization of untrusted data
+    CodeQL ID: python/unsafe-deserialization
     """
-    pickled_data = request.get_data()
-    # The 'pickle' module can execute arbitrary code.
-    deserialized_obj = pickle.loads(pickled_data)
-    return f"Deserialized: {deserialized_obj}"
+    print(f"\n[!] Triggering Unsafe Deserialization (CWE-502) with YAML")
+    # BAD: yaml.load is unsafe and can lead to arbitrary code execution if the input is crafted.
+    # The safe alternative is yaml.safe_load().
+    try:
+        data = yaml.load(yaml_string, Loader=yaml.FullLoader)
+        print(f"    Deserialized data: {data}")
+    except Exception as e:
+        print(f"    An error occurred during deserialization: {e}")
 
-@app.route('/login', methods=['POST'])
-def weak_hashing():
-    """
-    CWE-327: Use of a Broken or Risky Cryptographic Algorithm
-    CodeQL Alert: Use of a weak cryptographic hash function
-    """
-    password = request.form['password']
-    # MD5 is cryptographically broken and should not be used for passwords.
-    hashed_password = hashlib.md5(password.encode()).hexdigest()
-    # Also using SHA1 for another alert
-    sha1_hash = hashlib.sha1(password.encode()).hexdigest()
-    return f"MD5 Hash: {hashed_password}<br>SHA1 Hash: {sha1_hash}"
 
-@app.route('/xml')
-def xml_external_entity():
+def path_traversal(filename):
+    """
+    CWE-22: Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')
+    CodeQL ID: python/path-injection
+    """
+    print(f"\n[!] Triggering Path Traversal (CWE-22) with input: {filename}")
+    base_dir = "/var/www/uploads"
+    # BAD: Joining a path with untrusted input without sanitization.
+    # An input like "../../../../etc/passwd" could allow access to sensitive files.
+    full_path = os.path.join(base_dir, filename)
+    print(f"    Attempting to access file at: {full_path}")
+    # In a real app, this would be followed by `open(full_path, 'r')`
+    # We will just print the path to demonstrate the vulnerability.
+
+
+def xxe_vulnerability(xml_string):
     """
     CWE-611: Improper Restriction of XML External Entity Reference ('XXE')
-    CodeQL Alert: XML external entity injection
+    CodeQL ID: python/xxe
     """
-    xml_string = request.args.get('xml')
-    # The default XML parser is vulnerable to XXE attacks.
-    root = ElementTree.fromstring(xml_string)
-    return f"Parsed XML element: {root.tag}"
+    print(f"\n[!] Triggering XXE (CWE-611) with XML input")
+    # BAD: The default XML parser in lxml is vulnerable to XXE.
+    # An attacker can supply malicious XML to read local files or perform SSRF.
+    parser = etree.XMLParser() # The default parser is not secure
+    try:
+        tree = etree.fromstring(xml_string, parser)
+        print("    XML parsed successfully (this is bad if input is malicious).")
+    except etree.XMLSyntaxError as e:
+        print(f"    XML parsing failed: {e}")
 
-@app.route('/proxy')
-def server_side_request_forgery():
-    """
-    CWE-918: Server-Side Request Forgery (SSRF)
-    CodeQL Alert: Server-side request forgery
-    """
-    url = request.args.get('url')
-    # The server makes a request to a URL supplied by the user.
-    response = requests.get(url)
-    return response.text
 
-@app.route('/log')
-def log_injection():
+@app.route('/hello')
+def hello_xss():
     """
-    CWE-117: Improper Output Neutralization for Logs
-    CodeQL Alert: Log injection
-    """
-    username = request.args.get('username')
-    logging.basicConfig(filename='app.log', level=logging.INFO)
-    # Malicious input can inject newlines and forge log entries.
-    logging.info(f'Login attempt for user: {username}')
-    return "Logged event."
-
-@appoken('/redirect')
-def open_redirect():
-    """
-    CWE-601: URL Redirection to Untrusted Site ('Open Redirect')
-    CodeQL Alert: URL redirection from remote sources
-    """
-    target_url = request.args.get('url')
-    # Redirecting to a user-controlled URL.
-    return flask.redirect(target_url)
-
-@app.route('/run_code')
-def remote_code_execution_eval():
-    """
-    CWE-95: Improper Neutralization of Directives in Dynamically Evaluated Code ('Code Injection')
-    CodeQL Alert: Use of eval
-    """
-    code = request.args.get('code')
-    # 'eval' executes string expressions, a massive security risk with user input.
-    result = eval(code)
-    return f"Executed. Result: {result}"
-
-@app.route('/tmpfile')
-def insecure_temp_file():
-    """
-    CWE-377: Insecure Temporary File
-    CodeQL Alert: Insecure temporary file
-    """
-    # mktemp is insecure due to a race condition.
-    filename = tempfile.mktemp()
-    with open(filename, "w") as f:
-        f.write("This is a temporary file.")
-    return f"Created insecure temp file: {filename}"
+    CWE-79: Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')
+    CodeQL ID: python/jinja2-autoescaping-disabled, python/unsafe-html-construction
     
-@app.route('/admin')
-def csrf_vulnerable_form():
+    This function will be flagged by CodeQL when it analyzes the Flask application context.
     """
-    CWE-352: Cross-Site Request Forgery (CSRF)
-    CodeQL Alert: Flask CSRF protection disabled
-    This route would be part of a larger app where CSRF protection is missing globally.
-    CodeQL may flag the lack of CSRF middleware for the entire Flask app.
-    """
-    return """
-    <form method="POST" action="/change_password">
-        New Password: <input type="password" name="new_password">
-        <input type="submit" value="Change Password">
-    </form>
-    """
+    # Source of taint: user input from a request argument.
+    name = request.args.get('name', 'guest')
+    print(f"\n[!] Flask route /hello triggered with name='{name}' for XSS (CWE-79)")
+    # BAD: Returning raw, unescaped HTML containing user input.
+    # A request to /hello?name=<script>alert(1)</script> would execute JavaScript.
+    return f"<h1>Hello, {name}!</h1>"
 
-if __name__ == '__main__':
-    # CWE-215: Insertion of Sensitive Information into Sent Data
-    # CodeQL Alert: Application is running in debug mode
-    # Running Flask in debug mode exposes a remote debugger and is highly insecure.
-    app.run(host='0.0.0.0', port=5000, debug=True)
+
+# --- Main execution block to demonstrate vulnerabilities ---
+def main():
+    """
+    Main function to run all vulnerability demonstrations.
+    This part is for local execution and helps confirm the syntax is correct.
+    CodeQL analyzes the functions themselves, regardless of whether they are called.
+    """
+    print("--- Starting Vulnerable Python Application Demonstration ---")
+    print(f"User: {USER_INFO['name']} ({USER_INFO['email']})")
+
+    # Define malicious inputs
+    cmd_injection_input = "nonexistent.txt; whoami"
+    sql_injection_input = "' or '1'='1"
+    # Malicious YAML for RCE (runs 'id' command)
+    deserialization_input = "!!python/object/apply:os.system ['id']"
+    path_traversal_input = "../../../../etc/hosts"
+    # Malicious XML for XXE (tries to read /etc/passwd)
+    xxe_input = """<?xml version="1.0"?>
+    <!DOCTYPE foo [ <!ENTITY xxe SYSTEM "file:///etc/passwd"> ]>
+    <foo>&xxe;</foo>"""
+
+    # Trigger vulnerable functions
+    command_injection(cmd_injection_input)
+    sql_injection(sql_injection_input)
+    unsafe_deserialization(deserialization_input)
+    path_traversal(path_traversal_input)
+    xxe_vulnerability(xxe_input)
+    
+    print("\n--- Vulnerability demonstrations complete. ---")
+    print("Note: The XSS vulnerability (CWE-79) is in a Flask route.")
+    print("CodeQL will detect it by analyzing the web framework, not by direct execution here.")
+
+
+if __name__ == "__main__":
+    USER_INFO = {
+        "name": "Roop Singh",
+        "email": "roop.singh@zscaler.com"
+    }
+    main()
+    # To run the web app part for live testing:
+    # app.run(debug=True)
